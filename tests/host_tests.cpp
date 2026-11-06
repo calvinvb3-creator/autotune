@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "Editor.h"
 #include <iostream>
 #include <cstdlib>
 
@@ -132,6 +133,23 @@ int main() {
         auto file=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("pw-export-test",".wav");
         restored.exportTake(file);juce::WavAudioFormat format;std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(file.createInputStream().release(),true));
         check(reader!=nullptr && reader->lengthInSamples>96000, "edited take exports as a real audio file");reader.reset();file.deleteFile();
+        {
+            std::unique_ptr<juce::AudioProcessorEditor> ui(restored.createEditor());
+            std::function<NoteCanvas*(juce::Component*)> findCanvas=[&](juce::Component* c)->NoteCanvas* {if(auto* canvas=dynamic_cast<NoteCanvas*>(c))return canvas;for(int i=0;i<c->getNumChildComponents();++i)if(auto* canvas=findCanvas(c->getChildComponent(i)))return canvas;return nullptr;};
+            auto* canvas=findCanvas(ui.get());check(canvas!=nullptr,"native editor exposes its note canvas");
+            auto mouse=[&](juce::Point<float> position,juce::Point<float> down,bool dragging){auto now=juce::Time::getCurrentTime();return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(),position,juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier),1,0,0,0,0,canvas,canvas,now,down,now,1,dragging);};
+            auto note=restored.notes.data[0].view();juce::Point<float> point(54+static_cast<float>((note.start+0.15)*80),28+static_cast<float>((84-note.target)*17));
+            canvas->mouseDown(mouse(point,point,false));check(canvas->selected()==0,"click selects the rendered note");
+            canvas->tool=1;auto moved=point+juce::Point<float>(80,0);canvas->mouseDrag(mouse(moved,point,true));canvas->mouseUp(mouse(moved,point,true));
+            check(std::abs(restored.notes.data[0].start.load()-note.start-1)<1e-6,"time tool drags the note one second");
+            canvas->undo();check(std::abs(restored.notes.data[0].start.load()-note.start)<1e-6,"undo restores prior timing");
+            canvas->redo();check(std::abs(restored.notes.data[0].start.load()-note.start-1)<1e-6,"redo reapplies timing");
+            canvas->mouseDown(mouse(moved,moved,false));int count=restored.notes.count.load();canvas->split();check(restored.notes.count==count+1,"split control creates a second editable note");canvas->merge();check(restored.notes.count==count,"merge control rejoins source-contiguous notes");
+            auto pitchBefore=restored.notes.data[0].target.load();canvas->keyPressed(juce::KeyPress(juce::KeyPress::upKey));check(restored.notes.data[0].target==pitchBefore+1,"keyboard raises selected pitch");
+            while(restored.renderBusy.load())juce::Thread::sleep(1);check(restored.renderError().isEmpty(),"UI edits produce a successful render");
+            auto image=ui->createComponentSnapshot(ui->getLocalBounds());auto imageFile=juce::File::getCurrentWorkingDirectory().getChildFile("validation/editor.png");imageFile.getParentDirectory().createDirectory();auto output=imageFile.createOutputStream();check(output!=nullptr,"UI review image opens");juce::PNGImageFormat png;check(png.writeImageToStream(image,*output),"native UI renders to an inspection image");
+            std::cout<<"PASS native editor click, timing drag, undo/redo, split/merge, keyboard editing and snapshot\n";
+        }
         transport.samples=0;captured.clearNotes();check(captured.beginCapture(), "new capture arms after clearing");render(captured,transport,220,0.5,1);transport.samples=0;render(captured,transport,220,0.1,1);
         check(captured.captureFault.load() && !captured.capture.load(), "loop/seek during capture fails visibly without corrupting the take");captured.finishCapture();
         std::cout << "PASS captured audio, background editing, embedded session recall, WAV export, capture discontinuity checks\n";

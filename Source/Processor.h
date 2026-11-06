@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 #include "Core.h"
 #include "Shifter.h"
 #include "Notes.h"
@@ -39,8 +40,8 @@ public:
     void finishCapture();
     void requestRender();
     void setNoteEdits(const std::vector<pw::NoteView>&);
-    bool hasAudioTake() const { return capturedAudio && capturedAudio->frames > 0; }
-    std::shared_ptr<const pw::AudioTake> audioTake() const { return capturedAudio; }
+    bool hasAudioTake() const { const juce::ScopedLock lock(stateLock); return capturedAudio && capturedAudio->frames > 0; }
+    std::shared_ptr<const pw::AudioTake> audioTake() const { const juce::ScopedLock lock(stateLock); return capturedAudio; }
     std::atomic<bool> renderBusy{false}, captureFault{false};
     juce::String renderError() const { const juce::ScopedLock lock(errorLock); return renderFailure; }
     void exportTake(const juce::File&);
@@ -53,7 +54,7 @@ private:
     std::atomic<int> captureWriters{0}, renderReaders{0};
     std::atomic<uint64_t> renderGeneration{0};
     std::thread renderer;
-    mutable juce::CriticalSection errorLock;
+    mutable juce::CriticalSection stateLock, errorLock;
     juce::String renderFailure;
     void cancelRender();
     void discardRendered();

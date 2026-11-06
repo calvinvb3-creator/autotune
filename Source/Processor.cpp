@@ -23,6 +23,8 @@ bool PitchProcessor::isBusesLayoutSupported(const BusesLayout& b) const {
 }
 
 void PitchProcessor::prepareToPlay(double sr, int) {
+    const juce::ScopedLock stateGuard(stateLock);
+    if(capture.load()) {capture=false;captureFault=true;}
     if (!std::isfinite(sr) || sr < 8000 || sr > 192000) throw std::invalid_argument("Unsupported sample rate");
     rate = sr; detector.prepare(sr); shifter.prepare(sr, getTotalNumInputChannels());
     dryDelay = shifter.latency();
@@ -134,6 +136,7 @@ void PitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
 }
 
 void PitchProcessor::clearNotes() {
+    const juce::ScopedLock stateGuard(stateLock);
     const juce::ScopedLock lock(getCallbackLock());
     capture = false;
     while(captureWriters.load()>0) juce::Thread::sleep(1);
@@ -142,6 +145,7 @@ void PitchProcessor::clearNotes() {
 }
 
 void PitchProcessor::getStateInformation(juce::MemoryBlock& out) {
+    const juce::ScopedLock stateGuard(stateLock);
     const juce::ScopedLock lock(getCallbackLock());
     auto xml = parameters.copyState().createXml();
     auto* list = xml->createNewChildElement("DetectedNotes");
@@ -169,6 +173,7 @@ void PitchProcessor::getStateInformation(juce::MemoryBlock& out) {
 }
 
 void PitchProcessor::setStateInformation(const void* bytes, int size) {
+    const juce::ScopedLock stateGuard(stateLock);
     auto xml = getXmlFromBinary(bytes, size);
     if (!xml || !xml->hasTagName("PitchWorkbench")) return;
     const juce::ScopedLock lock(getCallbackLock());
@@ -236,6 +241,7 @@ void PitchProcessor::discardRendered() {
     renderedOwner.reset();
 }
 bool PitchProcessor::beginCapture() {
+    const juce::ScopedLock stateGuard(stateLock);
     if(capture.load()) return false;
     cancelRender();
     while(captureWriters.load()>0) juce::Thread::sleep(1);
@@ -247,6 +253,7 @@ bool PitchProcessor::beginCapture() {
     captureDestination=captureStorage.get(); capture=true; return true;
 }
 void PitchProcessor::finishCapture() {
+    const juce::ScopedLock stateGuard(stateLock);
     capture=false;
     while(captureWriters.load()>0) juce::Thread::sleep(1);
     captureDestination=nullptr;
@@ -262,10 +269,12 @@ void PitchProcessor::finishCapture() {
     }
 }
 void PitchProcessor::setNoteEdits(const std::vector<pw::NoteView>& edits) {
+    const juce::ScopedLock stateGuard(stateLock);
     if(capture.load()) return;
     notes.replace(edits); requestRender();
 }
 void PitchProcessor::requestRender() {
+    const juce::ScopedLock stateGuard(stateLock);
     if(!hasAudioTake()||capture.load()) return;
     cancelRender();
     auto source=capturedAudio; auto plan=notes.snapshot(); uint64_t generation=renderGeneration.load();
@@ -285,6 +294,7 @@ void PitchProcessor::requestRender() {
     });
 }
 void PitchProcessor::exportTake(const juce::File& file) {
+    const juce::ScopedLock stateGuard(stateLock);
     if(!hasAudioTake()||renderBusy.load()) return;
     auto* audio=renderedAudio.load(); if(!audio) return;
     juce::TemporaryFile temporary(file);
