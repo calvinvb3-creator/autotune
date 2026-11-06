@@ -1,0 +1,7 @@
+build/
+dist/
+__pycache__/
+_deps/
+*.component/
+*.vst3/
+.DS_Store

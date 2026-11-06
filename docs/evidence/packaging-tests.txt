@@ -1,0 +1,13 @@
+test_bundle_inspection_rejects_missing_text_wrong_version_and_traversal (test_packaging.PackagingTests.test_bundle_inspection_rejects_missing_text_wrong_version_and_traversal) ... ok
+test_component_bundles_are_not_relocatable (test_packaging.PackagingTests.test_component_bundles_are_not_relocatable) ... ok
+test_corresponding_source_includes_dependencies_and_excludes_build (test_packaging.PackagingTests.test_corresponding_source_includes_dependencies_and_excludes_build) ... ok
+test_distribution_has_optional_au_vst3_and_mandatory_source (test_packaging.PackagingTests.test_distribution_has_optional_au_vst3_and_mandatory_source) ... ok
+test_metadata_validates_version_and_architecture (test_packaging.PackagingTests.test_metadata_validates_version_and_architecture) ... ok
+test_source_archive_refuses_missing_dependency_source (test_packaging.PackagingTests.test_source_archive_refuses_missing_dependency_source) ... ok
+test_source_archive_refuses_symlinks (test_packaging.PackagingTests.test_source_archive_refuses_symlinks) ... ok
+test_system_install_destinations_are_standard (test_packaging.PackagingTests.test_system_install_destinations_are_standard) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.006s
+
+OK

@@ -1,0 +1,32 @@
+name: Build Mac plug-ins and local installer
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm native Apple silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Portable packaging tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Compile and validate native plug-ins
+        run: bash scripts/build-mac.sh
+      - name: Create local development pkg
+        run: python3 scripts/package_macos.py
+      - name: Upload installer and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PitchWorkbench-macOS-arm64
+          if-no-files-found: warn
+          path: |
+            dist/*.pkg
+            dist/*.sha256
+            build/validation/
+            build/Testing/Temporary/LastTest.log
