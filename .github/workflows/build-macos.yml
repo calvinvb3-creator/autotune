@@ -1,0 +1,64 @@
+name: Build Mac plug-ins and local installer
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: pitchworkbench-macos-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: build
+          key: pw-macos-arm64-v1-${{ github.run_id }}
+          restore-keys: pw-macos-arm64-v1-
+      - name: Confirm native Apple silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Portable packaging tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Compile and validate native plug-ins
+        run: bash scripts/build-mac.sh
+      - name: Independent offline audio measurements
+        run: |
+          python3 -m venv build/audio-test-env
+          build/audio-test-env/bin/pip install --quiet numpy scipy
+          build/audio-test-env/bin/python tests/verify_offline_audio.py build
+      - name: Create local development pkg
+        run: python3 scripts/package_macos.py
+      - name: Install package and validate installed plug-ins
+        run: |
+          set -euo pipefail
+          mkdir -p build/validation
+          sudo installer -pkg dist/*.pkg -target / 2>&1 | tee build/validation/installer.txt
+          codesign --verify --deep --strict "/Library/Audio/Plug-Ins/Components/Pitch Workbench.component"
+          codesign --verify --deep --strict "/Library/Audio/Plug-Ins/VST3/Pitch Workbench.vst3"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 2
+          auval -a
+          auval -v aufx PtWb Clvn 2>&1 | tee build/validation/installed-auval.txt
+          grep -q 'AU VALIDATION SUCCEEDED' build/validation/installed-auval.txt
+          build/pw_format_tests_artefacts/Release/pw_format_tests "/Library/Audio/Plug-Ins/VST3/Pitch Workbench.vst3" 2>&1 | tee build/validation/installed-vst3.txt
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: build
+          key: pw-macos-arm64-v1-${{ github.run_id }}
+      - name: Upload installer and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PitchWorkbench-macOS-arm64
+          if-no-files-found: warn
+          path: |
+            dist/*.pkg
+            dist/*.sha256
+            build/offline-*.wav
+            build/validation/
+            build/Testing/Temporary/LastTest.log

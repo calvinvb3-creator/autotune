@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+if [[ "$(uname -m)" != arm64 ]]; then
+  echo "Pitch Workbench requires an Apple silicon Mac." >&2
+  exit 1
+fi
+if [[ "${3:-/}" != / ]]; then
+  echo "Install Pitch Workbench on your active macOS system volume." >&2
+  exit 1
+fi
+if /usr/bin/pgrep -x 'Logic Pro' >/dev/null 2>&1; then
+  echo "Quit Logic Pro before installing or upgrading Pitch Workbench." >&2
+  exit 1
+fi
+exit 0

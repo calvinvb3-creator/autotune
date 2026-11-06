@@ -1,0 +1,24 @@
+{
+  "method": "Independent FFT peak interpolation",
+  "passed": true,
+  "results": [
+    {
+      "file": "automatic-A4.wav",
+      "sample_rate": 48000,
+      "target_hz": 440.0,
+      "measured_hz": 439.7668613279898,
+      "cents_error": -0.9175558533248058,
+      "peak": 0.336944580078125,
+      "rms": 0.2227079624375931
+    },
+    {
+      "file": "manual-A3-to-C4.wav",
+      "sample_rate": 48000,
+      "target_hz": 261.6255653005986,
+      "measured_hz": 261.6099877281649,
+      "cents_error": -0.10308330024938797,
+      "peak": 0.41827392578125,
+      "rms": 0.2695809046269353
+    }
+  ]
+}

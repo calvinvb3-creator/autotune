@@ -1,0 +1,8 @@
+Automatic 44100 Hz: 440.229 Hz, 0.900885 cents error
+Manual 44100 Hz: 261.647 Hz, 0.139725 cents error
+Automatic 48000 Hz: 440.018 Hz, 0.0709322 cents error
+Manual 48000 Hz: 261.667 Hz, 0.276841 cents error
+Automatic 96000 Hz: 440.017 Hz, 0.0680134 cents error
+Manual 96000 Hz: 261.667 Hz, 0.276325 cents error
+Unity impulse peak delay: 6144; reported delay: 6144
+PASS: 3762070 assertions; pitch, scale, segmentation, audio correction, stereo, latency.
