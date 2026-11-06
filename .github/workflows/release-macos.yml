@@ -1,0 +1,63 @@
+name: Signed and notarized Mac release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      PW_APP_CERTIFICATE_P12: ${{ secrets.PW_APP_CERTIFICATE_P12 }}
+      PW_INSTALLER_CERTIFICATE_P12: ${{ secrets.PW_INSTALLER_CERTIFICATE_P12 }}
+      PW_CERTIFICATE_PASSWORD: ${{ secrets.PW_CERTIFICATE_PASSWORD }}
+      PW_APP_SIGNING_IDENTITY: ${{ secrets.PW_APP_SIGNING_IDENTITY }}
+      PW_INSTALLER_SIGNING_IDENTITY: ${{ secrets.PW_INSTALLER_SIGNING_IDENTITY }}
+      PW_APPLE_ID: ${{ secrets.PW_APPLE_ID }}
+      PW_APPLE_TEAM_ID: ${{ secrets.PW_APPLE_TEAM_ID }}
+      PW_APPLE_APP_PASSWORD: ${{ secrets.PW_APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Apple release credentials
+        run: bash scripts/configure-signing.sh
+      - name: Portable packaging tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Compile and validate native plug-ins
+        run: bash scripts/build-mac.sh
+      - name: Independently measure rendered audio
+        run: |
+          python3 -m venv build/audio-test-env
+          build/audio-test-env/bin/pip install --quiet numpy scipy
+          build/audio-test-env/bin/python tests/verify_offline_audio.py build
+      - name: Sign, package, notarize, staple and assess
+        run: python3 scripts/package_macos.py --release
+      - name: Install and validate signed payloads
+        run: |
+          set -euo pipefail
+          mkdir -p build/validation
+          sudo installer -pkg dist/*.pkg -target / 2>&1 | tee build/validation/installer.txt
+          codesign --verify --deep --strict "/Library/Audio/Plug-Ins/Components/Pitch Workbench.component"
+          codesign --verify --deep --strict "/Library/Audio/Plug-Ins/VST3/Pitch Workbench.vst3"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 2
+          auval -v aufx PtWb Clvn 2>&1 | tee build/validation/installed-auval.txt
+          grep -q 'AU VALIDATION SUCCEEDED' build/validation/installed-auval.txt
+          build/pw_format_tests_artefacts/Release/pw_format_tests "/Library/Audio/Plug-Ins/VST3/Pitch Workbench.vst3" 2>&1 | tee build/validation/installed-vst3.txt
+      - name: Upload release package and validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PitchWorkbench-signed-macOS-arm64
+          if-no-files-found: warn
+          path: |
+            dist/*.pkg
+            dist/*.sha256
+            build/validation/
+            build/Testing/Temporary/LastTest.log
+      - name: Remove temporary signing keychain
+        if: always()
+        run: |
+          if [[ -n "${PW_CI_SIGNING_DIRECTORY:-}" ]]; then
+            security delete-keychain "$PW_CI_SIGNING_DIRECTORY/release.keychain-db" || true
+            rm -rf "$PW_CI_SIGNING_DIRECTORY"
+          fi

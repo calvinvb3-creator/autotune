@@ -77,7 +77,7 @@ void PitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
                 float value=buffer.getSample(std::min(c,channels-1),i);
                 take->samples[c][offset+i]=std::isfinite(value)?value:0;
             }
-            take->frames=offset+buffer.getNumSamples();
+            take->frames=offset+buffer.getNumSamples(); capturePublishedFrames=take->frames;
         }
     }
     bool jumped = transport && previousEnd >= 0 && std::abs(start - previousEnd) > 2.5 / rate;
@@ -137,7 +137,6 @@ void PitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
 
 void PitchProcessor::clearNotes() {
     const juce::ScopedLock stateGuard(stateLock);
-    const juce::ScopedLock lock(getCallbackLock());
     capture = false;
     while(captureWriters.load()>0) juce::Thread::sleep(1);
     captureDestination=nullptr; captureStorage.reset(); notes.clear();
@@ -146,11 +145,20 @@ void PitchProcessor::clearNotes() {
 
 void PitchProcessor::getStateInformation(juce::MemoryBlock& out) {
     const juce::ScopedLock stateGuard(stateLock);
-    const juce::ScopedLock lock(getCallbackLock());
+    auto source=capturedAudio;
+    if(!source && captureStorage) {
+        int frames=capturePublishedFrames.load();
+        if(frames>0) {
+            source=std::make_shared<pw::AudioTake>();source->rate=captureStorage->rate;source->origin=captureStorage->origin;source->allocate(frames,captureStorage->channels);
+            for(int c=0;c<source->channels;++c)std::copy_n(captureStorage->samples[c].begin(),frames,source->samples[c].begin());
+        }
+    }
     auto xml = parameters.copyState().createXml();
     auto* list = xml->createNewChildElement("DetectedNotes");
     for (int i = 0; i < notes.count.load(); ++i) {
-        auto n = notes.data[i].view(); auto* el = list->createNewChildElement("Note");
+        auto n = notes.data[i].view();
+        if(source) {n.end=std::min(n.end,source->origin+source->frames/source->rate);if(n.end<=n.start)continue;}
+        auto* el = list->createNewChildElement("Note");
         el->setAttribute("start", n.start); el->setAttribute("end", n.end);
         el->setAttribute("original", n.original); el->setAttribute("target", n.target);
         el->setAttribute("sourceStart",n.sourceBegin()); el->setAttribute("sourceEnd",n.sourceFinish());
@@ -158,8 +166,8 @@ void PitchProcessor::getStateInformation(juce::MemoryBlock& out) {
         el->setAttribute("modulation",n.modulation); el->setAttribute("drift",n.drift);
         el->setAttribute("fadeIn",n.fadeIn); el->setAttribute("fadeOut",n.fadeOut); el->setAttribute("muted",n.muted);
     }
-    if(hasAudioTake()) {
-        auto* audio=xml->createNewChildElement("SourceAudio"); auto source=capturedAudio;
+    if(source) {
+        auto* audio=xml->createNewChildElement("SourceAudio");
         audio->setAttribute("rate",source->rate);audio->setAttribute("origin",source->origin);
         audio->setAttribute("frames",source->frames);audio->setAttribute("channels",source->channels);
         juce::MemoryOutputStream compressed;
@@ -176,7 +184,6 @@ void PitchProcessor::setStateInformation(const void* bytes, int size) {
     const juce::ScopedLock stateGuard(stateLock);
     auto xml = getXmlFromBinary(bytes, size);
     if (!xml || !xml->hasTagName("PitchWorkbench")) return;
-    const juce::ScopedLock lock(getCallbackLock());
     capture = false; while(captureWriters.load()>0) juce::Thread::sleep(1); captureDestination=nullptr; cancelRender(); discardRendered(); capturedAudio.reset(); notes.clear();
     if (auto* list = xml->getChildByName("DetectedNotes")) {
         for (auto* el : list->getChildIterator()) {
@@ -248,7 +255,7 @@ bool PitchProcessor::beginCapture() {
     auto take=std::make_unique<pw::AudioTake>(); take->rate=rate; take->channels=getTotalNumInputChannels();
     try { take->allocate(static_cast<int>(rate*300),std::clamp(take->channels,1,2)); }
     catch(const std::bad_alloc&) { const juce::ScopedLock lock(errorLock); renderFailure="Not enough memory to capture. Close other applications."; return false; }
-    take->frames=0; captureDestination=nullptr; captureStorage=std::move(take);
+    take->frames=0; capturePublishedFrames=0; captureDestination=nullptr; captureStorage=std::move(take);
     notes.clear(); capturedAudio.reset(); discardRendered(); captureFault=false;
     captureDestination=captureStorage.get(); capture=true; return true;
 }
@@ -298,10 +305,10 @@ void PitchProcessor::exportTake(const juce::File& file) {
     if(!hasAudioTake()||renderBusy.load()) return;
     auto* audio=renderedAudio.load(); if(!audio) return;
     juce::TemporaryFile temporary(file);
-    auto stream=temporary.getFile().createOutputStream(); if(!stream) return;
+    auto stream=temporary.getFile().createOutputStream(); if(!stream) {const juce::ScopedLock lock(errorLock);renderFailure="Could not open the export destination.";return;}
     juce::WavAudioFormat format;
     std::unique_ptr<juce::AudioFormatWriter> writer(format.createWriterFor(stream.release(),audio->rate,static_cast<unsigned>(audio->channels),24,{},0));
-    if(!writer) return;
+    if(!writer) {const juce::ScopedLock lock(errorLock);renderFailure="Could not create a WAV writer.";return;}
     std::array<const float*,2> ptr{}; for(int c=0;c<audio->channels;++c) ptr[c]=audio->samples[c].data();
     bool ok=writer->writeFromFloatArrays(ptr.data(),audio->channels,audio->frames); writer.reset();
     if(!ok||!temporary.overwriteTargetFileWithTemporary()) {const juce::ScopedLock lock(errorLock);renderFailure="Could not save the exported WAV file.";}

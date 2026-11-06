@@ -17,11 +17,12 @@ struct AudioTake {
         return samples[std::min(ch,channels-1)][a]+static_cast<float>(frame-a)*(samples[std::min(ch,channels-1)][b]-samples[std::min(ch,channels-1)][a]);
     }
 };
-inline std::vector<float> pitchCurve(const AudioTake& take,int begin,int length) {
+inline std::vector<float> pitchCurve(const AudioTake& take,int begin,int length,const std::function<bool()>& cancelled=[] {return false;}) {
     Detector d; d.prepare(take.rate);
     std::vector<float> curve(length,std::numeric_limits<float>::quiet_NaN());
     float last=std::numeric_limits<float>::quiet_NaN();
     for(int i=0;i<length;++i) {
+        if(i%512==0&&cancelled())throw std::runtime_error("Render cancelled");
         double x=0; for(int c=0;c<take.channels;++c) x+=take.samples[c][begin+i]/take.channels;
         if(d.push(static_cast<float>(x))&&d.value().voiced()) {
             int t=std::clamp(i-static_cast<int>(d.centreDelay()),0,length-1);
@@ -100,7 +101,7 @@ inline std::unique_ptr<AudioTake> renderTake(const AudioTake& source,const std::
         std::vector<std::vector<float>> corrected(source.channels,std::vector<float>(length));
         bool pitchEdit=std::abs(n.target-n.original)>1e-7||n.modulation!=1||n.drift!=1||n.formant!=0;
         if(pitchEdit) {
-            auto curve=pitchCurve(source,begin,length);
+            auto curve=pitchCurve(source,begin,length,cancelled);
             double sum=0,sumT=0,sumTT=0,sumTP=0;
             for(int i=0;i<length;++i) { double t=static_cast<double>(i)/length-0.5; sum+=curve[i];sumT+=t;sumTT+=t*t;sumTP+=t*curve[i]; }
             double centre=sum/length,slope=(sumTP-sumT*centre)/std::max(1e-12,sumTT-sumT*sumT/length);

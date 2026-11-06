@@ -34,7 +34,16 @@ def spread(x):
     f=f[int(rate):int(2.5*rate)]
     return float(np.std(1200*np.log2(np.maximum(f,1)/220)))
 before=spread(modulated);after=spread(flattened);assert after<before*.65,(before,after)
-result=dict(fft_pitch_cents_error=float(cents),moved_source_rms=float(old),gain_db=float(db),pitch_variation_before_cents=before,pitch_variation_after_cents=after)
+_,vowel=load('offline-vowel-source.wav');_,shifted_formant=load('offline-formants-plus5.wav')
+def centroid(x):
+    segment=x[int(rate*.5):int(rate*1.5)]
+    power=np.abs(np.fft.rfft(segment*np.hanning(len(segment))))**2
+    frequency=np.fft.rfftfreq(len(segment),1/rate)
+    mask=(frequency>300)&(frequency<5000)
+    return float(np.sum(frequency[mask]*power[mask])/np.sum(power[mask]))
+formant_before=centroid(vowel);formant_after=centroid(shifted_formant)
+assert formant_after>formant_before*1.15,(formant_before,formant_after)
+result=dict(formant_spectral_centroid_before_hz=formant_before,formant_spectral_centroid_after_hz=formant_after,fft_pitch_cents_error=float(cents),moved_source_rms=float(old),gain_db=float(db),pitch_variation_before_cents=before,pitch_variation_after_cents=after)
 print(json.dumps(result,indent=2))
 (root/'validation').mkdir(exist_ok=True)
 (root/'validation/offline-independent-audio.json').write_text(json.dumps(result,indent=2)+'\n')

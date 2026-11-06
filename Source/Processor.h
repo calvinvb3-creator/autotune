@@ -51,7 +51,7 @@ private:
     std::shared_ptr<pw::AudioTake> capturedAudio;
     std::unique_ptr<pw::AudioTake> captureStorage, renderedOwner;
     std::atomic<pw::AudioTake*> captureDestination{nullptr}, renderedAudio{nullptr};
-    std::atomic<int> captureWriters{0}, renderReaders{0};
+    std::atomic<int> captureWriters{0}, renderReaders{0}, capturePublishedFrames{0};
     std::atomic<uint64_t> renderGeneration{0};
     std::thread renderer;
     mutable juce::CriticalSection stateLock, errorLock;

@@ -108,10 +108,14 @@ int main() {
     {
         PitchProcessor captured; PlayHead transport; setup(captured,transport,48000,1);
         check(captured.beginCapture(), "audio capture arms");
-        render(captured,transport,220,2.5,1); captured.finishCapture();
+        render(captured,transport,220,2.5,1);
+        juce::MemoryBlock duringCapture;captured.getStateInformation(duringCapture);
+        {PitchProcessor autosave;autosave.setStateInformation(duringCapture.getData(),static_cast<int>(duringCapture.getSize()));while(autosave.renderBusy.load())juce::Thread::sleep(1);check(autosave.hasAudioTake(),"autosave during capture retains recorded source");}
+        captured.finishCapture();
         while(captured.renderBusy.load()) juce::Thread::sleep(1);
         check(captured.hasAudioTake(), "captured source audio exists");
         check(captured.renderError().isEmpty(), "initial background render succeeds");
+        // A host autosave while capture is armed must retain already recorded source.
         auto edits=captured.notes.snapshot(); check(!edits.empty(), "captured notes exist");
         for(auto& note:edits) {note.target=60;double duration=note.end-note.start;note.start+=0.5;note.end=note.start+duration*1.2;note.gainDb=-3;}
         captured.setNoteEdits(edits);
@@ -138,9 +142,9 @@ int main() {
             std::function<NoteCanvas*(juce::Component*)> findCanvas=[&](juce::Component* c)->NoteCanvas* {if(auto* canvas=dynamic_cast<NoteCanvas*>(c))return canvas;for(int i=0;i<c->getNumChildComponents();++i)if(auto* canvas=findCanvas(c->getChildComponent(i)))return canvas;return nullptr;};
             auto* canvas=findCanvas(ui.get());check(canvas!=nullptr,"native editor exposes its note canvas");
             auto mouse=[&](juce::Point<float> position,juce::Point<float> down,bool dragging){auto now=juce::Time::getCurrentTime();return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(),position,juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier),1,0,0,0,0,canvas,canvas,now,down,now,1,dragging);};
-            auto note=restored.notes.data[0].view();juce::Point<float> point(54+static_cast<float>((note.start+0.15)*80),28+static_cast<float>((84-note.target)*17));
+            auto note=restored.notes.data[0].view();auto bounds=canvas->noteBounds(0);auto point=bounds.getCentre();
             canvas->mouseDown(mouse(point,point,false));check(canvas->selected()==0,"click selects the rendered note");
-            canvas->tool=1;auto moved=point+juce::Point<float>(80,0);canvas->mouseDrag(mouse(moved,point,true));canvas->mouseUp(mouse(moved,point,true));
+            canvas->tool=1;auto moved=point+juce::Point<float>(bounds.getWidth()/static_cast<float>(note.end-note.start),0);canvas->mouseDrag(mouse(moved,point,true));canvas->mouseUp(mouse(moved,point,true));
             check(std::abs(restored.notes.data[0].start.load()-note.start-1)<1e-6,"time tool drags the note one second");
             canvas->undo();check(std::abs(restored.notes.data[0].start.load()-note.start)<1e-6,"undo restores prior timing");
             canvas->redo();check(std::abs(restored.notes.data[0].start.load()-note.start-1)<1e-6,"redo reapplies timing");

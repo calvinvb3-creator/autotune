@@ -18,6 +18,7 @@ public:
     void setProperty(int field,double value);
     void apply(const std::vector<pw::NoteView>&);
     int selected() const {return selection.empty()?-1:*selection.begin();}
+    juce::Rectangle<float> noteBounds(int index) const {return rectangle(processor.notes.data[index].view());}
     int tool=0;
     std::function<void()> selectionChanged;
 private:
@@ -28,7 +29,7 @@ private:
     std::vector<pw::NoteView> before;
     std::vector<std::vector<pw::NoteView>> past,future;
     uint64_t revision=0;
-    static constexpr int left=54,top=28,row=17,highest=84,lowest=36;
+    static constexpr int left=54,top=28,row=17,highest=108,lowest=12;
     float yFor(double note) const {return top+static_cast<float>((highest-note)*row);}
     juce::Rectangle<float> rectangle(pw::NoteView n) const;
     void sync(); void changed();

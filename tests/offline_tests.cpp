@@ -34,6 +34,18 @@ int main(int argc,char**argv){
     need(measured.size()>20,"flattened audio measurable");double mean=0;for(double p:measured)mean+=p;mean/=measured.size();double variance=0;for(double p:measured)variance+=(p-mean)*(p-mean);variance/=measured.size();
     std::cout<<"Flattened pitch standard deviation: "<<100*std::sqrt(variance)<<" cents\n";need(std::sqrt(variance)<0.12,"drift/modulation controls flatten actual pitch");
     wav(vibrato,output+"/offline-vibrato-source.wav");wav(*flattened,output+"/offline-flattened.wav");
+    pw::AudioTake vowel;vowel.rate=48000;vowel.allocate(96000,1);
+    for(int i=0;i<vowel.frames;++i) {
+        double t=i/vowel.rate,x=0;
+        for(int h=1;h<=40;++h){double f=110*h;double level=0.05*(std::exp(-0.5*std::pow((f-700)/140,2))+0.65*std::exp(-0.5*std::pow((f-1250)/180,2)))+(h==1?0.015:0);x+=level*std::sin(2*pw::pi*f*t);}
+        vowel.samples[0][i]=static_cast<float>(x);
+    }
+    pw::NoteView formantNote{0,2,45,45};formantNote.formant=5;
+    auto formants=pw::renderTake(vowel,{formantNote});
+    need(std::abs(1200*std::log2(pitch(*formants,0.5,1.5)/110))<15,"formant shift preserves the fundamental");
+    double difference=0;for(int i=24000;i<72000;++i)difference+=std::pow(formants->samples[0][i]-vowel.samples[0][i],2);
+    need(std::sqrt(difference/48000)>0.01,"formant control changes actual audio");
+    wav(vowel,output+"/offline-vowel-source.wav");wav(*formants,output+"/offline-formants-plus5.wav");
     bool cancelled=false;try{pw::renderTake(vibrato,{n},[]{return true;});}catch(...){cancelled=true;}need(cancelled,"background cancellation is bounded");
     std::cout<<"PASS offline modulation/drift and render cancellation\n";
 }
