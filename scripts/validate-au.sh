@@ -26,5 +26,10 @@ if [[ -e "$destination" || -L "$destination" ]]; then mv "$destination" "$work/p
 trap restore EXIT
 ditto "$artifact" "$destination"
 codesign --force --sign - "$destination"
+# Refresh the per-user registrar after introducing a new AU bundle.
+killall -9 AudioComponentRegistrar 2>/dev/null || true
+sleep 2
+auval -a 2>&1 | tee "$log_directory/registered-aus.txt"
+plutil -p "$destination/Contents/Info.plist" > "$log_directory/au-info.txt"
 auval -v aufx PtWb Clvn 2>&1 | tee "$log_directory/auval.txt"
 grep -q 'AU VALIDATION SUCCEEDED' "$log_directory/auval.txt"
