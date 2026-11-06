@@ -201,7 +201,7 @@ def package(args: argparse.Namespace) -> Path:
         if args.release: command += ['--sign', args.installer_identity, '--timestamp']
         run([*command, staged])
         run(['pkgutil', '--expand', staged, work / 'expanded-product'])
-        run(['installer', '-showChoicesXML', '-pkg', staged], capture=True)
+        run(['installer', '-showChoicesXML', '-pkg', staged, '-target', '/'], capture=True)
         if args.release:
             run(['pkgutil', '--check-signature', staged])
             run(['xcrun', 'notarytool', 'submit', staged, '--keychain-profile', args.notary_profile, '--wait'])
