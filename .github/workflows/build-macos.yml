@@ -19,6 +19,16 @@ jobs:
         run: bash scripts/build-mac.sh
       - name: Create local development pkg
         run: python3 scripts/package_macos.py
+      - name: Install package and validate installed plug-ins
+        run: |
+          set -euo pipefail
+          mkdir -p build/validation
+          sudo installer -pkg dist/*.pkg -target / 2>&1 | tee build/validation/installer.txt
+          codesign --verify --deep --strict "/Library/Audio/Plug-Ins/Components/Pitch Workbench.component"
+          codesign --verify --deep --strict "/Library/Audio/Plug-Ins/VST3/Pitch Workbench.vst3"
+          auval -v aufx PtWb Clvn 2>&1 | tee build/validation/installed-auval.txt
+          grep -q 'AU VALIDATION SUCCEEDED' build/validation/installed-auval.txt
+          build/pw_format_tests_artefacts/Release/pw_format_tests "/Library/Audio/Plug-Ins/VST3/Pitch Workbench.vst3" 2>&1 | tee build/validation/installed-vst3.txt
       - name: Upload installer and logs
         if: always()
         uses: actions/upload-artifact@v4
