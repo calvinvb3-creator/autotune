@@ -166,7 +166,7 @@ def package(args: argparse.Namespace) -> Path:
             bundle = folder / entry[1]
             shutil.copytree(originals[kind], bundle, symlinks=True)
             binary = inspect_bundle(bundle, version)
-            run(['lipo', '-verify_arch', 'arm64', binary])
+            run(['lipo', binary, '-verify_arch', 'arm64'])
             dependencies = run(['otool', '-L', binary], capture=True).splitlines()[1:]
             for line in dependencies:
                 dependency = line.strip().split(' (', 1)[0]
