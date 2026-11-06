@@ -3,10 +3,13 @@
 #include "Core.h"
 #include "Shifter.h"
 #include "Notes.h"
+#include "Offline.h"
+#include <thread>
 
 class PitchProcessor final : public juce::AudioProcessor {
 public:
     PitchProcessor();
+    ~PitchProcessor() override;
     const juce::String getName() const override { return "Pitch Workbench"; }
     void prepareToPlay(double, int) override;
     void releaseResources() override {}
@@ -32,8 +35,29 @@ public:
     std::atomic<double> playheadSeconds{0}, detectedMidi{-1}, confidence{0}, appliedCents{0};
     std::atomic<int> bufferErrors{0};
     void clearNotes();
+    bool beginCapture();
+    void finishCapture();
+    void requestRender();
+    void setNoteEdits(const std::vector<pw::NoteView>&);
+    bool hasAudioTake() const { return capturedAudio && capturedAudio->frames > 0; }
+    std::shared_ptr<const pw::AudioTake> audioTake() const { return capturedAudio; }
+    std::atomic<bool> renderBusy{false}, captureFault{false};
+    juce::String renderError() const { const juce::ScopedLock lock(errorLock); return renderFailure; }
+    void exportTake(const juce::File&);
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
+    std::shared_ptr<pw::AudioTake> capturedAudio;
+    std::unique_ptr<pw::AudioTake> captureStorage, renderedOwner;
+    std::atomic<pw::AudioTake*> captureDestination{nullptr}, renderedAudio{nullptr};
+    std::atomic<int> captureWriters{0}, renderReaders{0};
+    std::atomic<uint64_t> renderGeneration{0};
+    std::thread renderer;
+    mutable juce::CriticalSection errorLock;
+    juce::String renderFailure;
+    void cancelRender();
+    void discardRendered();
+
     pw::Detector detector;
     pw::Correction correction;
     pw::Shifter shifter;

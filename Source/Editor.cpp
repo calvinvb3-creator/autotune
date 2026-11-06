@@ -1,206 +1,137 @@
 #include "Editor.h"
-
 namespace {
-const juce::Colour ink(0xffcbd3d9), muted(0xff7f8c97), background(0xff141a20), accent(0xffd39b5a);
+const juce::Colour ink(0xffe0e4e6),muted(0xff8b979f),background(0xff161b20),accent(0xffd6a665);
 juce::String noteName(double n) {
-    static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-    int value = static_cast<int>(std::round(n));
-    return juce::String(names[pw::pitchClass(value)]) + juce::String(value / 12 - 1);
+    static const char* names[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    int v=static_cast<int>(std::round(n));return juce::String(names[pw::pitchClass(v)])+juce::String(v/12-1);
 }
 }
-
 juce::Rectangle<float> NoteCanvas::rectangle(pw::NoteView n) const {
-    return {left + static_cast<float>((n.start - origin) * pixelsPerSecond), yFor(n.target) - row * 0.42f,
-            std::max(5.0f, static_cast<float>((n.end - n.start) * pixelsPerSecond)), row * 0.84f};
+    return {left+static_cast<float>((n.start-origin)*pixelsPerSecond),yFor(n.target)-row*0.42f,std::max(5.0f,static_cast<float>((n.end-n.start)*pixelsPerSecond)),row*0.84f};
 }
-
+void NoteCanvas::sync() {
+    auto v=processor.notes.revision.load();if(revision!=v) {selection.clear();past.clear();future.clear();revision=v;}
+}
 void NoteCanvas::paint(juce::Graphics& g) {
-    g.fillAll(background);
-    for (int note = lowest; note <= highest; ++note) {
-        float y = yFor(note);
-        int pc = pw::pitchClass(note);
-        bool black = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
-        g.setColour(black ? juce::Colour(0xff1a222a) : juce::Colour(0xff202931));
-        g.fillRect(static_cast<float>(left), y - row * 0.5f, static_cast<float>(getWidth() - left), static_cast<float>(row));
-        g.setColour(pc == 0 ? ink : muted); g.setFont(11.0f);
-        g.drawText(noteName(note), 3, static_cast<int>(y) - 8, left - 9, 16, juce::Justification::centredRight);
+    sync();g.fillAll(background);
+    for(int n=lowest;n<=highest;++n) {
+        int pc=pw::pitchClass(n);bool black=pc==1||pc==3||pc==6||pc==8||pc==10;
+        g.setColour(black?juce::Colour(0xff1a2128):juce::Colour(0xff232c34));g.fillRect(static_cast<float>(left),yFor(n)-row*0.5f,static_cast<float>(getWidth()-left),static_cast<float>(row));
+        g.setColour(pc==0?ink:muted);g.setFont(11.0f);g.drawText(noteName(n),3,static_cast<int>(yFor(n))-8,left-9,16,juce::Justification::centredRight);
     }
-    g.setColour(juce::Colour(0xff35404a));
-    double step = pixelsPerSecond < 30 ? 5 : 1;
-    for (double second = std::ceil(origin / step) * step; second < origin + getWidth() / pixelsPerSecond; second += step) {
-        int x = left + static_cast<int>((second - origin) * pixelsPerSecond);
-        g.drawVerticalLine(x, top - 6.0f, static_cast<float>(getHeight()));
-        g.setColour(muted); g.drawText(juce::String(second, 0) + "s", x + 4, 3, 48, 18, juce::Justification::left);
-        g.setColour(juce::Colour(0xff35404a));
+    double step=pixelsPerSecond<25?5:1;
+    for(double t=std::ceil(origin/step)*step;t<origin+getWidth()/pixelsPerSecond;t+=step) {
+        int x=left+static_cast<int>((t-origin)*pixelsPerSecond);g.setColour(juce::Colour(0xff36434d));g.drawVerticalLine(x,top-6.0f,static_cast<float>(getHeight()));
+        g.setColour(muted);g.drawText(juce::String(t,0)+"s",x+4,1,45,18,juce::Justification::left);
     }
-    for (int i = 0; i < processor.notes.count.load(); ++i) {
-        auto n = processor.notes.data[i].view(); auto r = rectangle(n);
-        if (r.getRight() < left || r.getX() > getWidth()) continue;
-        auto clipped = r.getIntersection(juce::Rectangle<float>(static_cast<float>(left), 0, static_cast<float>(getWidth() - left), static_cast<float>(getHeight())));
-        g.setColour(i == selected ? juce::Colour(0xffffc27c) : accent); g.fillRoundedRectangle(clipped, 2);
-        g.setColour(juce::Colour(0xff152029));
-        if (r.getWidth() > 30) g.drawText(noteName(n.target), clipped.toNearestInt(), juce::Justification::centred);
-        g.setColour(juce::Colour(0xff6e8394));
-        float original = yFor(n.original);
-        if (original > top && original < getHeight()) g.drawLine(clipped.getX(), original, clipped.getRight(), original, 1.0f);
+    for(int i=0;i<processor.notes.count.load();++i) {
+        auto n=processor.notes.data[i].view();auto r=rectangle(n);
+        if(r.getRight()<left||r.getX()>getWidth())continue;
+        auto clipped=r.getIntersection(juce::Rectangle<float>(static_cast<float>(left),0,static_cast<float>(getWidth()-left),static_cast<float>(getHeight())));
+        g.setColour(n.muted?muted:selection.count(i)?juce::Colour(0xffffd192):accent);g.fillRoundedRectangle(clipped,2);
+        g.setColour(background);if(r.getWidth()>28)g.drawText(noteName(n.target),clipped.toNearestInt(),juce::Justification::centred);
+        g.setColour(juce::Colour(0xff738b9c));float y=yFor(n.original);if(y>top&&y<getHeight())g.drawLine(clipped.getX(),y,clipped.getRight(),y,1);
     }
-    float playX = left + static_cast<float>((processor.playheadSeconds.load() - origin) * pixelsPerSecond);
-    if (playX >= left && playX < getWidth()) { g.setColour(juce::Colour(0xff6dc3bd)); g.drawVerticalLine(static_cast<int>(playX), 0, static_cast<float>(getHeight())); }
-    if (!processor.notes.count.load()) {
-        g.setColour(ink); g.setFont(16.0f);
-        g.drawText("Capture a vocal take to edit its notes", left + 20, 120, getWidth() - left - 40, 30, juce::Justification::centred);
-    }
+    float x=left+static_cast<float>((processor.playheadSeconds.load()-origin)*pixelsPerSecond);
+    if(x>=left&&x<getWidth()){g.setColour(juce::Colour(0xff79c5bd));g.drawVerticalLine(static_cast<int>(x),0,static_cast<float>(getHeight()));}
+    if(processor.notes.count==0){g.setColour(ink);g.setFont(16.0f);g.drawText("Capture one isolated vocal pass, then stop capture to edit.",left+20,120,getWidth()-left-40,40,juce::Justification::centred);}
 }
-
+void NoteCanvas::changed() {revision=processor.notes.revision.load();repaint();if(selectionChanged)selectionChanged();}
+void NoteCanvas::apply(const std::vector<pw::NoteView>& values) {
+    if(processor.capture.load())return;
+    past.push_back(processor.notes.snapshot());if(past.size()>50)past.erase(past.begin());future.clear();
+    processor.setNoteEdits(values);changed();
+}
 void NoteCanvas::mouseDown(const juce::MouseEvent& e) {
-    grabKeyboardFocus(); selected = -1;
-    if (processor.capture.load()) return;
-    for (int i = processor.notes.count.load() - 1; i >= 0; --i) {
-        auto n = processor.notes.data[i].view();
-        if (rectangle(n).contains(e.position)) { selected = i; selectedRevision = processor.notes.revision.load(); initialY = e.position.y; initialTarget = n.target; break; }
-    }
-    repaint();
+    sync();grabKeyboardFocus();if(processor.capture.load())return;
+    int hit=-1;for(int i=processor.notes.count.load()-1;i>=0;--i)if(rectangle(processor.notes.data[i].view()).contains(e.position)){hit=i;break;}
+    if(hit<0){selection.clear();changed();return;}
+    if(e.mods.isShiftDown()&&selection.count(hit))selection.erase(hit);
+    else {if(!e.mods.isShiftDown()&&!selection.count(hit))selection.clear();selection.insert(hit);}
+    initial=e.position;before=processor.notes.snapshot();changed();
 }
 void NoteCanvas::mouseDrag(const juce::MouseEvent& e) {
-    if (processor.capture.load() || selectedRevision != processor.notes.revision.load() || selected < 0 || selected >= processor.notes.count.load()) return;
-    double target = initialTarget + (initialY - e.position.y) / row;
-    if (!e.mods.isShiftDown()) target = std::round(target);
-    double original = processor.notes.data[selected].original.load();
-    processor.notes.data[selected].target = std::clamp(target, std::max(24.0, original - 12), std::min(96.0, original + 12)); repaint();
+    if(processor.capture.load()||selection.empty()||before.size()!=static_cast<size_t>(processor.notes.count.load()))return;
+    auto values=before;
+    for(int i:selection) {
+        auto& n=values[i];
+        if(tool==0) {double d=(initial.y-e.position.y)/row;if(!e.mods.isAltDown())d=std::round(d);n.target=std::clamp(n.target+d,n.original-12,n.original+12);}
+        else if(tool==1) {
+            double d=(e.position.x-initial.x)/pixelsPerSecond;
+            double minimum=processor.audioTake()?processor.audioTake()->origin:0;
+            d=std::max(d,minimum-n.start);n.start+=d;n.end+=d;
+        } else {
+            double minimum=(n.sourceFinish()-n.sourceBegin())*0.25,maximum=(n.sourceFinish()-n.sourceBegin())*4;
+            n.end=n.start+std::clamp(n.end-n.start+(e.position.x-initial.x)/pixelsPerSecond,std::max(0.025,minimum),maximum);
+        }
+        processor.notes.data[i].set(n);
+    }
+    repaint();if(selectionChanged)selectionChanged();
 }
-void NoteCanvas::remember(int index, double before, double after) {
-    if (index < 0 || index >= processor.notes.count.load() || before == after) return;
-    auto n = processor.notes.data[index].view();
-    history.push_back({index, before, after, n.start, n.end, processor.notes.revision.load()});
-    if (history.size() > 128) history.erase(history.begin());
+void NoteCanvas::mouseUp(const juce::MouseEvent& e) {
+    if(processor.capture.load()||before.empty()||selection.empty())return;
+    if(e.getDistanceFromDragStart()>1) {
+        auto after=processor.notes.snapshot();processor.notes.replace(before);revision=processor.notes.revision.load();apply(after);
+    }
+    before.clear();
 }
-void NoteCanvas::mouseUp(const juce::MouseEvent&) {
-    if (selectedRevision == processor.notes.revision.load() && selected >= 0 && selected < processor.notes.count.load()) remember(selected, initialTarget, processor.notes.data[selected].target.load());
-}
-void NoteCanvas::mouseDoubleClick(const juce::MouseEvent&) {
-    if (processor.capture.load() || selectedRevision != processor.notes.revision.load() || selected < 0 || selected >= processor.notes.count.load()) return;
-    auto n = processor.notes.data[selected].view();
-    remember(selected, n.target, n.original); processor.notes.data[selected].target = n.original; repaint();
-}
-void NoteCanvas::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) {
-    if (e.mods.isCommandDown() || e.mods.isCtrlDown()) pixelsPerSecond = std::clamp(pixelsPerSecond * std::exp(w.deltaY), 8.0, 500.0);
-    else origin = std::max(0.0, origin - (w.deltaX + w.deltaY) * 120.0 / pixelsPerSecond);
-    repaint();
+void NoteCanvas::mouseDoubleClick(const juce::MouseEvent&) {correct();}
+void NoteCanvas::mouseWheelMove(const juce::MouseEvent& e,const juce::MouseWheelDetails& w) {
+    if(e.mods.isCommandDown()||e.mods.isCtrlDown())pixelsPerSecond=std::clamp(pixelsPerSecond*std::exp(w.deltaY),8.0,600.0);
+    else origin=std::max(0.0,origin-(w.deltaX+w.deltaY)*120/pixelsPerSecond);repaint();
 }
 bool NoteCanvas::keyPressed(const juce::KeyPress& k) {
-    if (k.getModifiers().isCommandDown() && k.getTextCharacter() == 'z') { undo(); return true; }
-    if (selectedRevision != processor.notes.revision.load() || selected < 0 || selected >= processor.notes.count.load() || processor.capture.load()) return false;
-    if (k.getKeyCode() == juce::KeyPress::upKey || k.getKeyCode() == juce::KeyPress::downKey) {
-        double old = processor.notes.data[selected].target.load();
-        double original = processor.notes.data[selected].original.load();
-        double value = std::clamp(old + (k.getKeyCode() == juce::KeyPress::upKey ? 1 : -1), std::max(24.0, original - 12), std::min(96.0, original + 12));
-        remember(selected, old, value); processor.notes.data[selected].target = value; repaint(); return true;
-    }
+    if(k.getModifiers().isCommandDown()&&k.getTextCharacter()=='z'){if(k.getModifiers().isShiftDown())redo();else undo();return true;}
+    if(k.getModifiers().isCommandDown()&&k.getTextCharacter()=='a'){for(int i=0;i<processor.notes.count;++i)selection.insert(i);changed();return true;}
+    if(selection.empty()||processor.capture.load())return false;
+    if(k.getKeyCode()==juce::KeyPress::upKey||k.getKeyCode()==juce::KeyPress::downKey){auto a=processor.notes.snapshot();for(int i:selection)a[i].target=std::clamp(a[i].target+(k.getKeyCode()==juce::KeyPress::upKey?1:-1)*(k.getModifiers().isAltDown()?0.01:1),a[i].original-12,a[i].original+12);apply(a);return true;}
     return false;
 }
-void NoteCanvas::undo() {
-    if (history.empty() || processor.capture.load()) return;
-    auto c = history.back(); history.pop_back();
-    if (c.revision == processor.notes.revision.load() && c.index < processor.notes.count.load()) {
-        auto n = processor.notes.data[c.index].view();
-        if (n.start == c.start && n.end == c.end && n.target == c.after) processor.notes.data[c.index].target = c.before;
-    }
-    repaint();
-}
-void NoteCanvas::fit() {
-    double start = std::numeric_limits<double>::max(), end = 5, pitchTotal = 0;
-    int count = processor.notes.count.load();
-    for (int i = 0; i < count; ++i) {
-        auto n = processor.notes.data[i].view();
-        start = std::min(start, n.start); end = std::max(end, n.end); pitchTotal += n.target;
-    }
-    origin = count ? std::max(0.0, start - 0.25) : 0;
-    pixelsPerSecond = std::clamp((getWidth() - left - 20) / (end - origin + 0.25), 8.0, 500.0);
-    if (auto* view = findParentComponentOfClass<juce::Viewport>()) {
-        int y = static_cast<int>(yFor(count ? pitchTotal / count : 60)) - view->getHeight() / 2;
-        view->setViewPosition(0, std::max(0, y));
-    }
-    repaint();
-}
+void NoteCanvas::undo(){sync();if(past.empty()||processor.capture.load())return;future.push_back(processor.notes.snapshot());auto a=past.back();past.pop_back();processor.setNoteEdits(a);selection.clear();changed();}
+void NoteCanvas::redo(){sync();if(future.empty()||processor.capture.load())return;past.push_back(processor.notes.snapshot());auto a=future.back();future.pop_back();processor.setNoteEdits(a);selection.clear();changed();}
+void NoteCanvas::split(){auto a=processor.notes.snapshot();int i=selected();if(i>=0&&pw::splitNote(a,i,(a[i].start+a[i].end)*0.5)){apply(a);selection={i};}}
+void NoteCanvas::merge(){auto a=processor.notes.snapshot();int i=selected();if(pw::mergeNote(a,i)){apply(a);selection={i};}}
+void NoteCanvas::correct(){auto a=processor.notes.snapshot();for(int i:selection)a[i].target=pw::nearest(a[i].original,static_cast<int>(processor.parameters.getRawParameterValue("root")->load()),static_cast<int>(processor.parameters.getRawParameterValue("scale")->load()));if(!selection.empty())apply(a);}
+void NoteCanvas::resetNotes(){auto a=processor.notes.snapshot();for(int i:selection){auto n=a[i];n.start=n.sourceBegin();n.end=n.sourceFinish();n.target=n.original;n.gainDb=n.formant=0;n.modulation=n.drift=1;n.muted=false;n.fadeIn=n.fadeOut=0.005;a[i]=n;}if(!selection.empty())apply(a);}
+void NoteCanvas::setProperty(int field,double v){auto a=processor.notes.snapshot();for(int i:selection){auto& n=a[i];if(field==0)n.gainDb=v;if(field==1)n.formant=v;if(field==2)n.modulation=v/100;if(field==3)n.drift=v/100;if(field==4)n.fadeIn=n.fadeOut=v/1000;if(field==5)n.muted=v>0;}if(!selection.empty())apply(a);}
+void NoteCanvas::fit(){double begin=std::numeric_limits<double>::max(),end=0,pitch=0;int count=processor.notes.count;for(int i=0;i<count;++i){auto n=processor.notes.data[i].view();begin=std::min(begin,n.start);end=std::max(end,n.end);pitch+=n.target;}origin=count?std::max(0.0,begin-0.1):0;pixelsPerSecond=std::clamp((getWidth()-left-20)/std::max(1.0,end-origin+0.2),8.0,600.0);if(auto* v=findParentComponentOfClass<juce::Viewport>())v->setViewPosition(0,std::max(0,static_cast<int>(yFor(count?pitch/count:60))-v->getHeight()/2));repaint();}
 
-PitchEditor::PitchEditor(PitchProcessor& p) : AudioProcessorEditor(p), processor(p), canvas(p) {
-    look.setColour(juce::ResizableWindow::backgroundColourId, background);
-    look.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff29333e));
-    look.setColour(juce::ComboBox::textColourId, ink);
-    look.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff303c47));
-    look.setColour(juce::TextButton::textColourOffId, ink);
-    look.setColour(juce::Slider::thumbColourId, accent);
-    look.setColour(juce::Slider::trackColourId, accent);
-    setLookAndFeel(&look);
-    mode.addItemList({"Automatic", "Note editor"}, 1);
-    root.addItemList({"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}, 1);
-    scale.addItemList({"Chromatic", "Major", "Natural minor"}, 1);
-    modeAttachment = std::make_unique<ChoiceAttachment>(p.parameters, "mode", mode);
-    rootAttachment = std::make_unique<ChoiceAttachment>(p.parameters, "root", root);
-    scaleAttachment = std::make_unique<ChoiceAttachment>(p.parameters, "scale", scale);
-    for (auto* slider : {&speed, &amount}) {
-        slider->setSliderStyle(juce::Slider::LinearHorizontal);
-        slider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 65, 24);
-    }
-    speed.setTextValueSuffix(" ms"); amount.setTextValueSuffix(" %");
-    speedAttachment = std::make_unique<SliderAttachment>(p.parameters, "speed", speed);
-    amountAttachment = std::make_unique<SliderAttachment>(p.parameters, "amount", amount);
-    bypassAttachment = std::make_unique<ButtonAttachment>(p.parameters, "bypass", bypass);
-    speedLabel.setText("RETUNE TIME", juce::dontSendNotification);
-    amountLabel.setText("CORRECTION", juce::dontSendNotification);
-    for (auto* label : {&speedLabel, &amountLabel, &instruction, &status}) label->setColour(juce::Label::textColourId, ink);
-    capture.onClick = [this] {
-        if (!processor.capture.load() && processor.notes.count.load() != 0) {
-            noticeTicks = 100;
-            instruction.setText("Clear the current take before capturing again. Existing edits are preserved.", juce::dontSendNotification); return;
-        }
-        processor.capture = !processor.capture.load();
-    };
-    clear.onClick = [this] { processor.clearNotes(); canvas.repaint(); };
-    fit.onClick = [this] { canvas.fit(); };
-    undo.onClick = [this] { canvas.undo(); };
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&mode, &root, &scale, &speed, &amount, &speedLabel, &amountLabel, &capture, &clear, &fit, &undo, &bypass, &instruction, &status, &viewport}) addAndMakeVisible(c);
-    viewport.setViewedComponent(&canvas, false); viewport.setScrollBarsShown(true, false);
-    setSize(1020, 650); setResizable(true, false); setResizeLimits(900, 540, 1600, 1100);
-    viewport.setViewPosition(0, 260); startTimerHz(20);
+PitchEditor::PitchEditor(PitchProcessor& p):AudioProcessorEditor(p),processor(p),canvas(p) {
+    look.setColour(juce::ResizableWindow::backgroundColourId,background);look.setColour(juce::ComboBox::backgroundColourId,juce::Colour(0xff29343e));look.setColour(juce::ComboBox::textColourId,ink);
+    look.setColour(juce::TextButton::buttonColourId,juce::Colour(0xff303c46));look.setColour(juce::TextButton::textColourOffId,ink);look.setColour(juce::Slider::thumbColourId,accent);look.setColour(juce::Slider::trackColourId,accent);setLookAndFeel(&look);
+    mode.addItemList({"Automatic","Note editor"},1);root.addItemList({"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"},1);scale.addItemList({"Chromatic","Major","Natural minor"},1);
+    tool.addItemList({"Pitch tool","Move in time","Change length"},1);tool.setSelectedId(1);tool.onChange=[this]{canvas.tool=tool.getSelectedId()-1;};
+    modeAttachment=std::make_unique<ChoiceAttachment>(p.parameters,"mode",mode);rootAttachment=std::make_unique<ChoiceAttachment>(p.parameters,"root",root);scaleAttachment=std::make_unique<ChoiceAttachment>(p.parameters,"scale",scale);
+    for(auto* slider:{&speed,&amount,&gain,&formant,&modulation,&drift,&fade}){slider->setSliderStyle(juce::Slider::LinearHorizontal);slider->setTextBoxStyle(juce::Slider::TextBoxRight,false,70,22);}
+    speed.setTextValueSuffix(" ms");amount.setTextValueSuffix(" %");gain.setRange(-60,12,0.1);gain.setTextValueSuffix(" dB");formant.setRange(-12,12,0.1);formant.setTextValueSuffix(" st");modulation.setRange(0,200,1);modulation.setTextValueSuffix(" %");drift.setRange(0,200,1);drift.setTextValueSuffix(" %");fade.setRange(5,250,1);fade.setTextValueSuffix(" ms");
+    speedAttachment=std::make_unique<SliderAttachment>(p.parameters,"speed",speed);amountAttachment=std::make_unique<SliderAttachment>(p.parameters,"amount",amount);bypassAttachment=std::make_unique<ButtonAttachment>(p.parameters,"bypass",bypass);
+    std::array<std::pair<juce::Label*,const char*>,8> labels={{{&speedLabel,"RETUNE"},{&amountLabel,"AUTO CORRECTION"},{&inspectorTitle,"SELECT A NOTE"},{&gainLabel,"LEVEL"},{&formantLabel,"FORMANTS"},{&modLabel,"MODULATION"},{&driftLabel,"LINEAR DRIFT"},{&fadeLabel,"EDGE FADES"}}};
+    for(auto& x:labels){x.first->setText(x.second,juce::dontSendNotification);x.first->setColour(juce::Label::textColourId,ink);}
+    instruction.setColour(juce::Label::textColourId,ink);status.setColour(juce::Label::textColourId,muted);
+    capture.onClick=[this]{if(processor.capture.load())processor.finishCapture();else if(processor.notes.count==0)processor.beginCapture();};clear.onClick=[this]{processor.clearNotes();canvas.repaint();};fit.onClick=[this]{canvas.fit();};undo.onClick=[this]{canvas.undo();};redo.onClick=[this]{canvas.redo();};split.onClick=[this]{canvas.split();};merge.onClick=[this]{canvas.merge();};correct.onClick=[this]{canvas.correct();};reset.onClick=[this]{canvas.resetNotes();};
+    std::array<juce::Slider*,5> inspectors={&gain,&formant,&modulation,&drift,&fade};for(int i=0;i<5;++i){auto* s=inspectors[i];s->onDragEnd=[this,s,i]{canvas.setProperty(i,s->getValue());};s->onValueChange=[this,s,i]{if(!s->isMouseButtonDown())canvas.setProperty(i,s->getValue());};}
+    mute.onClick=[this]{canvas.setProperty(5,mute.getToggleState()?1:0);};canvas.selectionChanged=[this]{updateInspector();};
+    exportAudio.onClick=[this]{chooser=std::make_unique<juce::FileChooser>("Export edited take",juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PitchWorkbench-take.wav"),"*.wav");juce::Component::SafePointer<PitchEditor> safe(this);chooser->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|juce::FileBrowserComponent::warnAboutOverwriting,[safe](const juce::FileChooser& c){if(safe&&c.getResult()!=juce::File())safe->processor.exportTake(c.getResult());});};
+    for(juce::Component* c:std::initializer_list<juce::Component*>{&mode,&root,&scale,&tool,&speed,&amount,&speedLabel,&amountLabel,&capture,&clear,&fit,&undo,&redo,&split,&merge,&correct,&reset,&exportAudio,&bypass,&instruction,&status,&viewport,&gain,&formant,&modulation,&drift,&fade,&gainLabel,&formantLabel,&modLabel,&driftLabel,&fadeLabel,&inspectorTitle,&mute})addAndMakeVisible(c);
+    viewport.setViewedComponent(&canvas,false);viewport.setScrollBarsShown(true,false);setSize(1180,720);setResizable(true,false);setResizeLimits(1060,600,1800,1200);viewport.setViewPosition(0,260);updateInspector();startTimerHz(15);
 }
-PitchEditor::~PitchEditor() { stopTimer(); setLookAndFeel(nullptr); }
-void PitchEditor::paint(juce::Graphics& g) {
-    g.fillAll(background); g.setColour(ink); g.setFont(24.0f);
-    g.drawText("PITCH WORKBENCH", 22, 14, 340, 34, juce::Justification::left);
-    g.setColour(muted); g.setFont(12.0f);
-    g.drawText("DEVELOPMENT BUILD  /  MONOPHONIC VOCALS", 365, 22, 420, 22, juce::Justification::left);
-    g.setColour(juce::Colour(0xff35404a)); g.drawHorizontalLine(132, 20, static_cast<float>(getWidth() - 20));
+PitchEditor::~PitchEditor(){stopTimer();setLookAndFeel(nullptr);}
+void PitchEditor::paint(juce::Graphics& g){g.fillAll(background);g.setColour(ink);g.setFont(23);g.drawText("PITCH WORKBENCH",20,12,380,35,juce::Justification::left);g.setColour(muted);g.setFont(12);g.drawText("MONOPHONIC NOTE EDITOR",410,20,330,22,juce::Justification::left);}
+void PitchEditor::resized(){
+    mode.setBounds(20,65,150,28);root.setBounds(180,65,65,28);scale.setBounds(255,65,140,28);speedLabel.setBounds(415,47,170,18);speed.setBounds(415,69,210,26);amountLabel.setBounds(640,47,180,18);amount.setBounds(640,69,210,26);bypass.setBounds(getWidth()-110,15,90,28);
+    int x=20;for(auto* b:{&capture,&clear,&fit,&undo,&redo,&split,&merge,&correct,&reset}){b->setBounds(x,114,b==&capture?112:72,28);x+=b==&capture?120:80;}tool.setBounds(20,157,175,28);status.setBounds(210,157,getWidth()-230,28);instruction.setBounds(20,193,getWidth()-40,25);
+    int inspectorX=getWidth()-240;viewport.setBounds(20,230,getWidth()-280,getHeight()-250);canvas.setSize(viewport.getWidth()-16,875);inspectorTitle.setBounds(inspectorX,230,220,30);
+    int y=278;std::array<std::pair<juce::Label*,juce::Slider*>,5> controls={{{&gainLabel,&gain},{&formantLabel,&formant},{&modLabel,&modulation},{&driftLabel,&drift},{&fadeLabel,&fade}}};for(auto& c:controls){c.first->setBounds(inspectorX,y,220,20);c.second->setBounds(inspectorX,y+22,220,27);y+=65;}mute.setBounds(inspectorX,y,210,26);exportAudio.setBounds(inspectorX,getHeight()-55,220,30);
 }
-void PitchEditor::resized() {
-    mode.setBounds(22, 65, 155, 28); root.setBounds(188, 65, 65, 28); scale.setBounds(264, 65, 145, 28);
-    speedLabel.setBounds(430, 47, 190, 20); speed.setBounds(430, 69, 220, 27);
-    amountLabel.setBounds(668, 47, 180, 20); amount.setBounds(668, 69, 220, 27);
-    bypass.setBounds(getWidth() - 112, 16, 92, 30);
-    capture.setBounds(22, 148, 140, 30); clear.setBounds(174, 148, 100, 30);
-    fit.setBounds(286, 148, 90, 30); undo.setBounds(388, 148, 105, 30);
-    status.setBounds(505, 148, getWidth() - 525, 30);
-    instruction.setBounds(22, 187, getWidth() - 44, 30);
-    viewport.setBounds(22, 225, getWidth() - 44, getHeight() - 247);
-    canvas.setSize(viewport.getWidth() - 16, 875);
-}
-void PitchEditor::timerCallback() {
-    bool armed = processor.capture.load();
-    capture.setButtonText(armed ? "Stop capture" : "Capture notes");
-    capture.setColour(juce::TextButton::buttonColourId, armed ? juce::Colour(0xff864b38) : juce::Colour(0xff303c47));
-    double n = processor.detectedMidi.load();
-    juce::String text = n >= 0 ? noteName(n) + "  |  " + juce::String(processor.appliedCents.load(), 0) + " cents" : "No voiced pitch";
-    text += "  |  " + juce::String(processor.notes.count.load()) + " notes";
-    if (processor.bufferErrors.load()) text = "AUDIO BUFFER ERROR: " + juce::String(processor.bufferErrors.load());
-    status.setText(text, juce::dontSendNotification);
-    if (noticeTicks > 0) --noticeTicks;
-    else if (armed && processor.notes.count.load() >= pw::Notes::capacity)
-        instruction.setText("Capture limit reached. Stop capture to edit this take.", juce::dontSendNotification);
-    else if (armed && !processor.hasTransport.load())
-        instruction.setText("Capture needs the host timeline. Start playback in Logic to capture notes.", juce::dontSendNotification);
-    else if (armed) instruction.setText("Play one pass in Logic, then stop capture. Capture monitors the uncorrected vocal. Avoid looping.", juce::dontSendNotification);
-    else if (processor.parameters.getRawParameterValue("mode")->load() < 0.5f)
-        instruction.setText("Automatic: choose key and scale. Lower retune time gives faster correction. Use an isolated vocal track.", juce::dontSendNotification);
-    else instruction.setText("Note editor: drag notes vertically, Shift-drag for cents. Double-click restores measured pitch. Replay the same region.", juce::dontSendNotification);
+void PitchEditor::updateInspector(){int i=canvas.selected();bool valid=i>=0&&i<processor.notes.count&&!processor.capture.load();for(auto* s:{&gain,&formant,&modulation,&drift,&fade})s->setEnabled(valid&&processor.hasAudioTake());mute.setEnabled(valid&&processor.hasAudioTake());if(!valid){inspectorTitle.setText("SELECT A NOTE",juce::dontSendNotification);return;}auto n=processor.notes.data[i].view();inspectorTitle.setText(noteName(n.target)+"  /  "+juce::String(n.end-n.start,2)+" s",juce::dontSendNotification);gain.setValue(n.gainDb,juce::dontSendNotification);formant.setValue(n.formant,juce::dontSendNotification);modulation.setValue(n.modulation*100,juce::dontSendNotification);drift.setValue(n.drift*100,juce::dontSendNotification);fade.setValue(std::max(n.fadeIn,n.fadeOut)*1000,juce::dontSendNotification);mute.setToggleState(n.muted,juce::dontSendNotification);}
+void PitchEditor::timerCallback(){
+    if(!processor.capture.load()&&processor.captureFault.load())processor.finishCapture();
+    bool armed=processor.capture.load(),busy=processor.renderBusy.load();capture.setButtonText(armed?"Stop capture":"Capture");capture.setEnabled(armed||processor.notes.count==0);clear.setEnabled(!armed);exportAudio.setEnabled(processor.hasAudioTake()&&!busy);
+    bool manual=processor.parameters.getRawParameterValue("mode")->load()>0.5;tool.setEnabled(manual&&processor.hasAudioTake());speed.setEnabled(!manual);amount.setEnabled(!manual);
+    juce::String text=juce::String(processor.notes.count.load())+" notes";if(busy)text+="  |  Rendering edits…";else if(processor.hasAudioTake())text+="  |  Captured audio ready";if(processor.bufferErrors)text+="  |  Audio buffer error";auto error=processor.renderError();if(error.isNotEmpty())text="Render failed: "+error;status.setText(text,juce::dontSendNotification);
+    if(processor.captureFault.load())instruction.setText("Capture stopped: timeline jumped or the five-minute limit was reached. Clear and capture one continuous pass.",juce::dontSendNotification);
+    else if(armed)instruction.setText("Play one continuous pass in Logic. Stop capture before editing. Do not loop while capturing.",juce::dontSendNotification);
+    else if(manual)instruction.setText("Select a tool, then drag a note. Alt-drag for cents. Shift-click selects more notes. Cmd-A selects all. Split divides at the midpoint.",juce::dontSendNotification);
+    else instruction.setText("Automatic: choose key and scale. For detailed editing, capture a take and switch to Note editor.",juce::dontSendNotification);
     canvas.repaint();
 }

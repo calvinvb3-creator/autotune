@@ -104,6 +104,38 @@ int main() {
             std::cout << "PASS processor: " << sr << " Hz, " << channels << " channels, variable block sizes\n";
         }
     }
+    {
+        PitchProcessor captured; PlayHead transport; setup(captured,transport,48000,1);
+        check(captured.beginCapture(), "audio capture arms");
+        render(captured,transport,220,2.5,1); captured.finishCapture();
+        while(captured.renderBusy.load()) juce::Thread::sleep(1);
+        check(captured.hasAudioTake(), "captured source audio exists");
+        check(captured.renderError().isEmpty(), "initial background render succeeds");
+        auto edits=captured.notes.snapshot(); check(!edits.empty(), "captured notes exist");
+        for(auto& note:edits) {note.target=60;double duration=note.end-note.start;note.start+=0.5;note.end=note.start+duration*1.2;note.gainDb=-3;}
+        captured.setNoteEdits(edits);
+        while(captured.renderBusy.load()) juce::Thread::sleep(1);
+        check(captured.renderError().isEmpty(), "edited background render succeeds");
+        parameter(captured,"mode",1); transport.samples=0;
+        auto result=render(captured,transport,220,3.5,1);
+        check(std::abs(1200*std::log2(pitch(result,48000)/pw::frequency(60)))<15, "captured audio pitch and timing edits reach processor output");
+        juce::MemoryBlock session;captured.getStateInformation(session);
+        PitchProcessor restored;restored.setStateInformation(session.getData(),static_cast<int>(session.getSize()));
+        while(restored.renderBusy.load()) juce::Thread::sleep(1);
+        check(restored.hasAudioTake(), "source audio survives session restore");
+        check(restored.renderError().isEmpty(), "restored captured take renders");
+        auto recalled=restored.notes.snapshot();check(recalled.size()==edits.size(), "all edited notes survive session restore");
+        check(std::abs(recalled[0].start-edits[0].start)<1e-8 && recalled[0].gainDb==-3, "timing and inspector settings survive restore");
+        PlayHead recalledTransport;setup(restored,recalledTransport,48000,1);
+        auto recalledAudio=render(restored,recalledTransport,220,3.5,1);
+        check(std::abs(1200*std::log2(pitch(recalledAudio,48000)/pw::frequency(60)))<15,"restored captured audio plays edited pitch");
+        auto file=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("pw-export-test",".wav");
+        restored.exportTake(file);juce::WavAudioFormat format;std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(file.createInputStream().release(),true));
+        check(reader!=nullptr && reader->lengthInSamples>96000, "edited take exports as a real audio file");reader.reset();file.deleteFile();
+        transport.samples=0;captured.clearNotes();check(captured.beginCapture(), "new capture arms after clearing");render(captured,transport,220,0.5,1);transport.samples=0;render(captured,transport,220,0.1,1);
+        check(captured.captureFault.load() && !captured.capture.load(), "loop/seek during capture fails visibly without corrupting the take");captured.finishCapture();
+        std::cout << "PASS captured audio, background editing, embedded session recall, WAV export, capture discontinuity checks\n";
+    }
     PitchProcessor processor;
     processor.setStateInformation("invalid state", 13);
     check(processor.notes.count == 0, "invalid state does not corrupt notes");

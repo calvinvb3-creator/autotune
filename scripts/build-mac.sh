@@ -19,7 +19,7 @@ if ! command -v cmake >/dev/null 2>&1; then
 fi
 mkdir -p build
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
-cmake --build build --config Release --target PitchWorkbench_AU PitchWorkbench_VST3 pw_core_tests pw_host_tests pw_format_tests --parallel 4
+cmake --build build --config Release --target PitchWorkbench_AU PitchWorkbench_VST3 pw_core_tests pw_offline_tests pw_host_tests pw_format_tests --parallel 4
 codesign --force --sign - "build/PitchWorkbench_artefacts/Release/VST3/Pitch Workbench.vst3"
 ctest --test-dir build -C Release --output-on-failure --no-tests=error
 bash scripts/validate-au.sh

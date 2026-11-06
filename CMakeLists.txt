@@ -51,6 +51,11 @@ target_include_directories(pw_core_tests PRIVATE Source)
 target_link_libraries(pw_core_tests PRIVATE pw_rubberband)
 add_test(NAME pitch_engine COMMAND pw_core_tests "${CMAKE_CURRENT_BINARY_DIR}")
 
+add_executable(pw_offline_tests tests/offline_tests.cpp)
+target_include_directories(pw_offline_tests PRIVATE Source)
+target_link_libraries(pw_offline_tests PRIVATE pw_rubberband)
+add_test(NAME offline_editing COMMAND pw_offline_tests "${CMAKE_CURRENT_BINARY_DIR}")
+
 if(PW_BUILD_PLUGIN)
     if(NOT APPLE)
         message(FATAL_ERROR "The plug-in target currently requires macOS. Use -DPW_BUILD_PLUGIN=OFF for engine tests.")

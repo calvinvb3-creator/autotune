@@ -143,7 +143,7 @@ def package(args: argparse.Namespace) -> Path:
         inspect_bundle(bundle, version)
     registered = json.loads(run(['ctest', '--test-dir', build, '-C', 'Release', '--show-only=json-v1'], capture=True))
     tests = {test['name']: test for test in registered.get('tests', [])}
-    for name in ('pitch_engine', 'processor_host', 'vst3_binary'):
+    for name in ('pitch_engine', 'offline_editing', 'processor_host', 'vst3_binary'):
         if name not in tests or any(p.get('name') == 'DISABLED' and p.get('value') for p in tests[name].get('properties', [])):
             raise ValueError(f'Required native test is missing or disabled: {name}')
     # A stale passing ctest log is insufficient: rerun the actual current tests.

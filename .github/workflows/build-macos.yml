@@ -22,6 +22,11 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - name: Compile and validate native plug-ins
         run: bash scripts/build-mac.sh
+      - name: Independent offline audio measurements
+        run: |
+          python3 -m venv build/audio-test-env
+          build/audio-test-env/bin/pip install --quiet numpy scipy
+          build/audio-test-env/bin/python tests/verify_offline_audio.py build
       - name: Create local development pkg
         run: python3 scripts/package_macos.py
       - name: Install package and validate installed plug-ins
@@ -51,5 +56,6 @@ jobs:
           path: |
             dist/*.pkg
             dist/*.sha256
+            build/offline-*.wav
             build/validation/
             build/Testing/Temporary/LastTest.log

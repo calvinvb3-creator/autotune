@@ -44,6 +44,12 @@ void PitchProcessor::processBlockBypassed(juce::AudioBuffer<float>& b, juce::Mid
 
 void PitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
     juce::ScopedNoDenormals guard;
+    struct Reader {
+        std::atomic<int>& count;
+        explicit Reader(std::atomic<int>& c):count(c) { ++count; }
+        ~Reader() { --count; }
+    } playbackReader(renderReaders), captureWriter(captureWriters);
+    auto* rendered = renderedAudio.load();
     int channels = juce::jmin(2, buffer.getNumChannels());
     if (dryDelay == 0 || !channels) return;
     bool playing = false, transport = false;
@@ -55,8 +61,23 @@ void PitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             else if (auto samples = position->getTimeInSamples()) { start = *samples / rate; transport = true; }
         }
     }
+    if(!std::isfinite(start)||start<0) {start=0;transport=false;playing=false;}
     hostPlaying = playing; hasTransport = transport; playheadSeconds = start;
     bool recording = capture.load() && playing && transport;
+    if(recording) if(auto* take=captureDestination.load()) {
+        if(take->frames==0) take->origin=start;
+        int offset=static_cast<int>(std::llround((start-take->origin)*rate));
+        int limit=static_cast<int>(take->samples[0].size());
+        if(std::abs(offset-take->frames)>2 || offset<0 || offset+buffer.getNumSamples()>limit) {
+            captureFault=true; capture=false; recording=false;
+        } else {
+            for(int c=0;c<take->channels;++c) for(int i=0;i<buffer.getNumSamples();++i) {
+                float value=buffer.getSample(std::min(c,channels-1),i);
+                take->samples[c][offset+i]=std::isfinite(value)?value:0;
+            }
+            take->frames=offset+buffer.getNumSamples();
+        }
+    }
     bool jumped = transport && previousEnd >= 0 && std::abs(start - previousEnd) > 2.5 / rate;
     if ((playing && !wasPlaying) || (playing && jumped)) resetStream();
     if (!recording || !wasCapture) notes.stopSegment();
@@ -95,11 +116,16 @@ void PitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
         shifter.push(frame, wet, ratio);
         // Smooth both host bypass and the plug-in's bypass control. Dry audio
         // has the same reported latency as wet audio, avoiding comb filtering.
-        float goal = (bypass || recording || amount == 0) ? 1.0f : 0.0f;
+        float goal = (bypass || recording || (mode==0 && amount == 0)) ? 1.0f : 0.0f;
         bypassMix += std::clamp(goal - bypassMix, -1.0f / 128, 1.0f / 128);
         for (int ch = 0; ch < channels; ++ch) {
             float delayed = dry[ch][dryCursor]; dry[ch][dryCursor] = frame[ch];
-            buffer.setSample(ch, i, wet[ch] + bypassMix * (delayed - wet[ch]));
+            float processed=wet[ch];
+            if(mode==1 && !recording && playing && transport && rendered) {
+                double frame=(start+(i-dryDelay)/rate-rendered->origin)*rendered->rate;
+                if(frame>=0 && frame<rendered->frames) processed=rendered->at(ch,frame);
+            }
+            buffer.setSample(ch, i, processed + bypassMix * (delayed - processed));
         }
         dryCursor = (dryCursor + 1) % dryDelay;
     }
@@ -109,7 +135,10 @@ void PitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
 
 void PitchProcessor::clearNotes() {
     const juce::ScopedLock lock(getCallbackLock());
-    capture = false; notes.clear();
+    capture = false;
+    while(captureWriters.load()>0) juce::Thread::sleep(1);
+    captureDestination=nullptr; captureStorage.reset(); notes.clear();
+    cancelRender(); discardRendered(); capturedAudio.reset();
 }
 
 void PitchProcessor::getStateInformation(juce::MemoryBlock& out) {
@@ -120,6 +149,21 @@ void PitchProcessor::getStateInformation(juce::MemoryBlock& out) {
         auto n = notes.data[i].view(); auto* el = list->createNewChildElement("Note");
         el->setAttribute("start", n.start); el->setAttribute("end", n.end);
         el->setAttribute("original", n.original); el->setAttribute("target", n.target);
+        el->setAttribute("sourceStart",n.sourceBegin()); el->setAttribute("sourceEnd",n.sourceFinish());
+        el->setAttribute("gainDb",n.gainDb); el->setAttribute("formant",n.formant);
+        el->setAttribute("modulation",n.modulation); el->setAttribute("drift",n.drift);
+        el->setAttribute("fadeIn",n.fadeIn); el->setAttribute("fadeOut",n.fadeOut); el->setAttribute("muted",n.muted);
+    }
+    if(hasAudioTake()) {
+        auto* audio=xml->createNewChildElement("SourceAudio"); auto source=capturedAudio;
+        audio->setAttribute("rate",source->rate);audio->setAttribute("origin",source->origin);
+        audio->setAttribute("frames",source->frames);audio->setAttribute("channels",source->channels);
+        juce::MemoryOutputStream compressed;
+        {
+            juce::GZIPCompressorOutputStream gzip(&compressed,6,false);
+            for(int c=0;c<source->channels;++c) gzip.write(source->samples[c].data(),static_cast<size_t>(source->frames)*sizeof(float));
+        }
+        audio->addTextElement(compressed.getMemoryBlock().toBase64Encoding());
     }
     copyXmlToBinary(*xml, out);
 }
@@ -128,7 +172,7 @@ void PitchProcessor::setStateInformation(const void* bytes, int size) {
     auto xml = getXmlFromBinary(bytes, size);
     if (!xml || !xml->hasTagName("PitchWorkbench")) return;
     const juce::ScopedLock lock(getCallbackLock());
-    capture = false; notes.clear();
+    capture = false; while(captureWriters.load()>0) juce::Thread::sleep(1); captureDestination=nullptr; cancelRender(); discardRendered(); capturedAudio.reset(); notes.clear();
     if (auto* list = xml->getChildByName("DetectedNotes")) {
         for (auto* el : list->getChildIterator()) {
             if (!el->hasTagName("Note")) continue;
@@ -136,14 +180,119 @@ void PitchProcessor::setStateInformation(const void* bytes, int size) {
                            el->getDoubleAttribute("original"), el->getDoubleAttribute("target")};
             if (!std::isfinite(n.start) || !std::isfinite(n.end) || !std::isfinite(n.original) || !std::isfinite(n.target) ||
                 n.start < 0 || n.end <= n.start || n.original < 0 || n.original > 127 || n.target < 0 || n.target > 127) continue;
+            n.sourceStart=el->getDoubleAttribute("sourceStart",n.start); n.sourceEnd=el->getDoubleAttribute("sourceEnd",n.end);
+            n.gainDb=el->getDoubleAttribute("gainDb",0);n.formant=el->getDoubleAttribute("formant",0);
+            n.modulation=el->getDoubleAttribute("modulation",1);n.drift=el->getDoubleAttribute("drift",1);
+            n.fadeIn=el->getDoubleAttribute("fadeIn",0.005);n.fadeOut=el->getDoubleAttribute("fadeOut",0.005);n.muted=el->getBoolAttribute("muted",false);
+            if(!std::isfinite(n.sourceStart)||!std::isfinite(n.sourceEnd)||n.sourceEnd<=n.sourceStart||
+               !std::isfinite(n.gainDb)||!std::isfinite(n.formant)||!std::isfinite(n.modulation)||!std::isfinite(n.drift)||
+               !std::isfinite(n.fadeIn)||!std::isfinite(n.fadeOut)) continue;
+            n.gainDb=std::clamp(n.gainDb,-60.0,12.0); n.formant=std::clamp(n.formant,-12.0,12.0);
+            n.modulation=std::clamp(n.modulation,0.0,2.0);n.drift=std::clamp(n.drift,0.0,2.0);
+            n.fadeIn=std::clamp(n.fadeIn,0.0,1.0);n.fadeOut=std::clamp(n.fadeOut,0.0,1.0);
             n.target = std::clamp(n.target, n.original - 12, n.original + 12);
             int index = notes.count.load(); if (index >= pw::Notes::capacity) break;
             notes.data[index].set(n); notes.count = index + 1;
         }
     }
+    if(auto* element=xml->getChildByName("SourceAudio")) {
+        double sr=element->getDoubleAttribute("rate"),origin=element->getDoubleAttribute("origin");
+        int frames=element->getIntAttribute("frames"),channels=element->getIntAttribute("channels");
+        if(std::isfinite(sr)&&sr>=8000&&sr<=192000&&std::isfinite(origin)&&origin>=0&&frames>0&&frames<=sr*300&&channels>=1&&channels<=2) {
+            juce::MemoryBlock packed;
+            if(packed.fromBase64Encoding(element->getAllSubText())) {
+                juce::MemoryInputStream input(packed,false);juce::GZIPDecompressorInputStream gzip(&input,false);
+                auto source=std::make_shared<pw::AudioTake>();source->rate=sr;source->origin=origin;source->allocate(frames,channels);
+                bool valid=true;
+                for(int c=0;c<channels;++c) {
+                    size_t bytes=static_cast<size_t>(frames)*sizeof(float),done=0;
+                    auto* dest=reinterpret_cast<char*>(source->samples[c].data());
+                    while(done<bytes) {int n=gzip.read(dest+done,static_cast<int>(std::min(bytes-done,static_cast<size_t>(65536))));if(n<=0)break;done+=n;}
+                    if(done!=bytes) valid=false;
+                    for(float v:source->samples[c]) if(!std::isfinite(v)) valid=false;
+                }
+                if(valid) capturedAudio=source;
+            }
+        }
+    }
+    xml->deleteAllChildElementsWithTagName("SourceAudio");
     xml->deleteAllChildElementsWithTagName("DetectedNotes");
     parameters.replaceState(juce::ValueTree::fromXml(*xml));
+    requestRender();
 }
 
 juce::AudioProcessorEditor* PitchProcessor::createEditor() { return new PitchEditor(*this); }
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new PitchProcessor(); }
+
+PitchProcessor::~PitchProcessor() {
+    capture=false; cancelRender(); discardRendered();
+}
+void PitchProcessor::cancelRender() {
+    ++renderGeneration; if(renderer.joinable()) renderer.join(); renderBusy=false;
+}
+void PitchProcessor::discardRendered() {
+    renderedAudio=nullptr;
+    while(renderReaders.load()>0) juce::Thread::sleep(1);
+    renderedOwner.reset();
+}
+bool PitchProcessor::beginCapture() {
+    if(capture.load()) return false;
+    cancelRender();
+    while(captureWriters.load()>0) juce::Thread::sleep(1);
+    auto take=std::make_unique<pw::AudioTake>(); take->rate=rate; take->channels=getTotalNumInputChannels();
+    try { take->allocate(static_cast<int>(rate*300),std::clamp(take->channels,1,2)); }
+    catch(const std::bad_alloc&) { const juce::ScopedLock lock(errorLock); renderFailure="Not enough memory to capture. Close other applications."; return false; }
+    take->frames=0; captureDestination=nullptr; captureStorage=std::move(take);
+    notes.clear(); capturedAudio.reset(); discardRendered(); captureFault=false;
+    captureDestination=captureStorage.get(); capture=true; return true;
+}
+void PitchProcessor::finishCapture() {
+    capture=false;
+    while(captureWriters.load()>0) juce::Thread::sleep(1);
+    captureDestination=nullptr;
+    if(captureStorage && captureStorage->frames>0) {
+        for(int c=0;c<captureStorage->channels;++c) captureStorage->samples[c].resize(captureStorage->frames);
+        capturedAudio=std::shared_ptr<pw::AudioTake>(captureStorage.release());
+        for(int i=0;i<notes.count.load();++i) {
+            auto n=notes.data[i].view();
+            n.start=std::max(n.start,capturedAudio->origin); n.end=std::min(n.end,capturedAudio->origin+capturedAudio->frames/capturedAudio->rate);
+            n.sourceStart=n.start; n.sourceEnd=n.end; notes.data[i].set(n);
+        }
+        requestRender();
+    }
+}
+void PitchProcessor::setNoteEdits(const std::vector<pw::NoteView>& edits) {
+    if(capture.load()) return;
+    notes.replace(edits); requestRender();
+}
+void PitchProcessor::requestRender() {
+    if(!hasAudioTake()||capture.load()) return;
+    cancelRender();
+    auto source=capturedAudio; auto plan=notes.snapshot(); uint64_t generation=renderGeneration.load();
+    {const juce::ScopedLock lock(errorLock);renderFailure.clear();}
+    renderBusy=true;
+    renderer=std::thread([this,source,plan,generation] {
+        try {
+            auto result=pw::renderTake(*source,plan,[&] {return renderGeneration.load()!=generation;});
+            if(renderGeneration.load()==generation) {
+                auto old=std::move(renderedOwner); renderedOwner=std::move(result); renderedAudio=renderedOwner.get();
+                while(renderReaders.load()>0) juce::Thread::sleep(1);
+            }
+        } catch(const std::exception& e) {
+            if(renderGeneration.load()==generation) {const juce::ScopedLock lock(errorLock);renderFailure=e.what();}
+        }
+        if(renderGeneration.load()==generation) renderBusy=false;
+    });
+}
+void PitchProcessor::exportTake(const juce::File& file) {
+    if(!hasAudioTake()||renderBusy.load()) return;
+    auto* audio=renderedAudio.load(); if(!audio) return;
+    juce::TemporaryFile temporary(file);
+    auto stream=temporary.getFile().createOutputStream(); if(!stream) return;
+    juce::WavAudioFormat format;
+    std::unique_ptr<juce::AudioFormatWriter> writer(format.createWriterFor(stream.release(),audio->rate,static_cast<unsigned>(audio->channels),24,{},0));
+    if(!writer) return;
+    std::array<const float*,2> ptr{}; for(int c=0;c<audio->channels;++c) ptr[c]=audio->samples[c].data();
+    bool ok=writer->writeFromFloatArrays(ptr.data(),audio->channels,audio->frames); writer.reset();
+    if(!ok||!temporary.overwriteTargetFileWithTemporary()) {const juce::ScopedLock lock(errorLock);renderFailure="Could not save the exported WAV file.";}
+}

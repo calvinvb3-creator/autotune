@@ -43,6 +43,8 @@ public:
             rubberband_process(state, inputs, block, 0); drain(); pad -= block;
         }
     }
+    void setFormant(double semitones) { if(state) rubberband_set_formant_scale(state, std::exp2(std::clamp(semitones,-12.0,12.0)/12)); }
+    int controlDelay() const { return state ? static_cast<int>(rubberband_get_preferred_start_pad(state)+rubberband_get_start_delay(state)) : 0; }
     int latency() const { return reserve; }
     int errors() const { return underruns + overflows; }
     void push(const float* frame, float* result, double ratio) {
